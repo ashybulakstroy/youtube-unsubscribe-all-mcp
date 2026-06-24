@@ -22,13 +22,17 @@ def main() -> None:
     fetch_parser.add_argument("-n", "--num", type=int, default=5, help="Videos per channel (default: 5)")
     fetch_parser.add_argument("-o", "--output", default=None, help="Save output to file")
 
-    unsub_parser = sub.add_parser("unsub", help="Unsubscribe from channels (all or by name pattern)")
+    unsub_parser = sub.add_parser("unsub", help="Unsubscribe from channels (by name, metadata filter, or all)")
     unsub_parser.add_argument("--browser", default="edge", help="Browser to use: edge or chrome (default: edge)")
     unsub_parser.add_argument("--profile-dir", default=None, help="Path to browser profile User Data directory (auto-detected if omitted)")
     unsub_parser.add_argument("--dry-run", action="store_true", help="List channels without unsubscribing")
     unsub_parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
     unsub_parser.add_argument("--name", action="append", dest="name_patterns", default=None,
                               help="Channel name pattern (supports * wildcard, repeatable). Omit to unsubscribe from ALL.")
+    unsub_parser.add_argument("--subs-below", type=int, default=None,
+                              help="Unsubscribe from channels with fewer than N subscribers")
+    unsub_parser.add_argument("--inactive", type=int, default=None, dest="inactive_days",
+                              help="Unsubscribe from channels with no video in N days")
 
     list_parser = sub.add_parser("list-subs", help="List subscribed channels")
     list_parser.add_argument("--browser", default="edge", help="Browser to use: edge or chrome (default: edge)")
@@ -41,7 +45,8 @@ def main() -> None:
     elif args.command == "list-subs":
         cmd_list(args.browser, args.profile_dir)
     elif args.command == "unsub":
-        cmd_unsub(args.browser, args.dry_run, args.yes, args.profile_dir, args.name_patterns)
+        cmd_unsub(args.browser, args.dry_run, args.yes, args.profile_dir,
+                  args.name_patterns, args.subs_below, args.inactive_days)
 
 
 if __name__ == "__main__":

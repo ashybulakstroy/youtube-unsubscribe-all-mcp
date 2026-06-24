@@ -1,8 +1,10 @@
 """Unsubscribe from all YouTube channels using Playwright (browser context)."""
 
+import concurrent.futures
 import fnmatch
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 API_VERSION = "2.20230530.01.00"
@@ -139,6 +141,125 @@ def _unsubscribe(page, channel_id: str) -> dict:
     """)
 
 
+def _extract_ytdlp(url: str, extract_flat: bool = True, playlistend: int = 1) -> dict | None:
+    try:
+        import yt_dlp
+        with yt_dlp.YoutubeDL({
+            "quiet": True,
+            "extract_flat": extract_flat,
+            "playlistend": playlistend,
+            "skip_download": True,
+        }) as ydl:
+            return ydl.extract_info(url, download=False)
+    except Exception:
+        return None
+
+
+def _fetch_channel_metadata(channel: dict, need_video_date: bool = False) -> dict:
+    url = channel.get("url") or f"https://www.youtube.com/channel/{channel['id']}"
+    info = _extract_ytdlp(url, extract_flat=True, playlistend=1)
+    if not info:
+        return {
+            "id": channel["id"],
+            "name": channel.get("name", ""),
+            "subs": None,
+            "tags": [],
+            "description": "",
+            "last_video_date": None,
+            "last_video_title": None,
+        }
+
+    meta = {
+        "id": info.get("channel_id") or channel["id"],
+        "name": info.get("channel") or channel.get("name", ""),
+        "subs": info.get("channel_follower_count"),
+        "tags": info.get("tags", []),
+        "description": (info.get("description") or "")[:500],
+        "last_video_date": None,
+        "last_video_title": None,
+    }
+
+    entries = info.get("entries")
+    if entries and need_video_date:
+        first_id = entries[0].get("id")
+        if first_id:
+            vinfo = _extract_ytdlp(f"https://www.youtube.com/watch?v={first_id}", extract_flat=False)
+            if vinfo:
+                meta["last_video_date"] = vinfo.get("upload_date")
+                meta["last_video_title"] = vinfo.get("title")
+
+    return meta
+
+
+def _fetch_subscriptions_metadata(channels: list[dict], need_video_date: bool = False) -> list[dict]:
+    total = len(channels)
+    print(f"Fetching metadata for {total} channels...", file=sys.stderr, flush=True)
+    result: list[dict] = [None] * total
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        fut_map = {}
+        for i, ch in enumerate(channels):
+            fut_map[pool.submit(_fetch_channel_metadata, ch, need_video_date)] = i
+
+        done = 0
+        for future in concurrent.futures.as_completed(fut_map):
+            idx = fut_map[future]
+            result[idx] = future.result()
+            done += 1
+            if done % 10 == 0 or done == total:
+                print(f"  metadata {done}/{total}", file=sys.stderr, flush=True)
+
+    return result
+
+
+def _filter_by_metadata(
+    channels: list[dict],
+    subs_below: int | None = None,
+    inactive_days: int | None = None,
+) -> list[dict]:
+    """Filter channels list, keeping only those that match unsubscribe criteria.
+
+    subs_below: keep channels with subs < subs_below (low-subs → unsubscribe)
+    inactive_days: keep channels with last video older than inactive_days
+    Returns the filtered (to-unsubscribe) list.
+    """
+    if subs_below is None and inactive_days is None:
+        return channels  # no metadata filter
+
+    now = datetime.now(timezone.utc)
+    result = []
+
+    for ch in channels:
+        meta = ch.get("_meta", {})
+        reasons = []
+
+        if subs_below is not None:
+            subs = meta.get("subs")
+            if subs is None:
+                reasons.append("subs unknown")
+            elif subs < subs_below:
+                reasons.append(f"{subs} subs < {subs_below}")
+
+        if inactive_days is not None:
+            ud = meta.get("last_video_date")
+            if ud is None:
+                reasons.append("last video unknown")
+            else:
+                try:
+                    last = datetime.strptime(ud, "%Y%m%d").replace(tzinfo=timezone.utc)
+                    days = (now - last).days
+                    if days > inactive_days:
+                        reasons.append(f"{days}d inactive > {inactive_days}d")
+                except ValueError:
+                    reasons.append("invalid date")
+
+        if reasons:
+            ch["_filter_reason"] = "; ".join(reasons)
+            result.append(ch)
+
+    return result
+
+
 def cmd_list(browser: str, profile_dir: str | None = None) -> None:
     user_data, channel = _resolve_browser(browser, profile_dir)
     from playwright.sync_api import sync_playwright
@@ -160,7 +281,13 @@ def cmd_list(browser: str, profile_dir: str | None = None) -> None:
         print(f"  {ch['name']} — https://www.youtube.com/channel/{ch['id']}")
 
 
-def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str | None = None, name_patterns: list[str] | None = None) -> None:
+def cmd_unsub(
+    browser: str, dry_run: bool, yes: bool = False,
+    profile_dir: str | None = None,
+    name_patterns: list[str] | None = None,
+    subs_below: int | None = None,
+    inactive_days: int | None = None,
+) -> None:
     user_data, channel = _resolve_browser(browser, profile_dir)
     from playwright.sync_api import sync_playwright
 
@@ -171,8 +298,13 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
     total_ok = 0
     total_fail = 0
     confirmed = dry_run or yes
+    need_meta = subs_below is not None or inactive_days is not None
 
-    label = f"matching {name_patterns}" if name_patterns else "ALL"
+    label = "ALL"
+    if name_patterns:
+        label = f"matching {name_patterns}"
+    if need_meta:
+        label += f" [subs<{subs_below or '∞'}, inactive>{inactive_days or '∞'}d]"
 
     print("Launching browser...", file=sys.stderr, flush=True)
     with sync_playwright() as pw:
@@ -202,12 +334,28 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
             if name_patterns:
                 before = len(channels)
                 channels = [ch for ch in channels if _match_patterns(ch.get("name", ""), name_patterns)]
-                print(f"Found {before} subscribed, {len(channels)} match {label}.", file=sys.stderr, flush=True)
+                print(f"Found {before} subscribed, {len(channels)} match name patterns.", file=sys.stderr, flush=True)
             else:
                 print(f"Found {len(channels)} subscribed channels.", file=sys.stderr, flush=True)
 
             if not channels:
                 print("No channels match the given patterns.", file=sys.stderr, flush=True)
+                break
+
+            # Fetch metadata and filter (only on first pass)
+            if need_meta and attempt == 1:
+                need_date = inactive_days is not None
+                meta_list = _fetch_subscriptions_metadata(channels, need_video_date=need_date)
+                for ch, meta in zip(channels, meta_list):
+                    ch["_meta"] = meta
+
+                before = len(channels)
+                channels = _filter_by_metadata(channels, subs_below, inactive_days)
+                if before != len(channels):
+                    print(f"Metadata filter: {len(channels)} of {before} match criteria.", file=sys.stderr, flush=True)
+
+            if not channels:
+                print("No channels match the given criteria.", file=sys.stderr, flush=True)
                 break
 
             if attempt == 1 and not confirmed:
@@ -220,7 +368,12 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
 
             if dry_run:
                 for ch in channels:
-                    print(f"  {ch['name']} — https://www.youtube.com/channel/{ch['id']}")
+                    reason = ch.get("_filter_reason", "")
+                    extra = f"  [{reason}]" if reason else ""
+                    print(f"  {ch['name']} — {ch['id']}{extra}")
+                    meta = ch.get("_meta", {})
+                    if meta.get("subs") is not None:
+                        print(f"      subs: {meta['subs']}, last video: {meta.get('last_video_date', '?')}")
                 context.close()
                 return
 

@@ -18,6 +18,8 @@ from yt_feed.unsub import (
     _default_profile_dir,
     _browser_channel,
     _match_patterns,
+    _fetch_subscriptions_metadata,
+    _filter_by_metadata,
     YT_API_BASE,
     API_VERSION,
 )
@@ -216,17 +218,21 @@ async def list_subscriptions(
 
 
 @mcp.tool(
-    description="Unsubscribe from YouTube channels, optionally filtered by name patterns with * wildcard.",
+    description="Unsubscribe from YouTube channels, optionally filtered by name patterns with * wildcard or by metadata (subs/inactivity).",
 )
 async def unsubscribe_all(
     browser: str = "edge",
     profile_dir: str | None = None,
     confirm: bool = False,
     name_patterns: list[str] | None = None,
+    subs_below: int | None = None,
+    inactive_days: int | None = None,
 ) -> dict:
-    """Unsubscribe from channels. If name_patterns is provided (e.g. ['*news*', '*tech']),
-    only channels whose name matches at least one pattern are unsubscribed.
-    Omit name_patterns to unsubscribe from EVERY channel."""
+    """Unsubscribe from channels. Options:
+    - name_patterns: e.g. ['*news*', '*tech'] — only matching names
+    - subs_below: unsubscribe from channels with fewer than N subscribers
+    - inactive_days: unsubscribe from channels with no video in N days
+    Omit all filters to unsubscribe from EVERY channel."""
     if not confirm:
         return {"status": "cancelled", "message": "Set confirm=True to proceed with unsubscription."}
 
@@ -234,6 +240,7 @@ async def unsubscribe_all(
     total_ok = 0
     total_fail = 0
     passes_done = 0
+    need_meta = subs_below is not None or inactive_days is not None
 
     try:
         page = await _ensure_browser(browser, profile_dir)
@@ -244,6 +251,17 @@ async def unsubscribe_all(
 
             if name_patterns:
                 channels = [ch for ch in channels if _match_patterns(ch.get("name", ""), name_patterns)]
+
+            # Metadata filter (first pass only)
+            if need_meta and attempt == 1:
+                need_date = inactive_days is not None
+                loop = asyncio.get_event_loop()
+                meta_list = await loop.run_in_executor(
+                    None, lambda: _fetch_subscriptions_metadata(channels, need_date),
+                )
+                for ch, meta in zip(channels, meta_list):
+                    ch["_meta"] = meta
+                channels = _filter_by_metadata(channels, subs_below, inactive_days)
 
             total = len(channels)
 
