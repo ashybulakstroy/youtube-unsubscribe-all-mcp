@@ -1,0 +1,4 @@
+# Add one YouTube channel URL per line
+# Example:
+# https://www.youtube.com/@channelhandle
+# https://www.youtube.com/c/ChannelName
