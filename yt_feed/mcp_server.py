@@ -14,6 +14,7 @@ from typing import Any
 from mcp.server import FastMCP
 
 # Internal helpers — sync, imported at module level
+from yt_feed.feed import search_videos as _search_videos, fetch_latest as _fetch_latest
 from yt_feed.unsub import (
     _default_profile_dir,
     _browser_channel,
@@ -337,6 +338,37 @@ async def close_browser() -> str:
     """Explicitly close the managed browser context."""
     await _close_browser()
     return "Browser closed."
+
+
+@mcp.tool(
+    description="Search YouTube videos by query and return a list of results with title, channel, URL and date.",
+)
+async def search_videos(query: str, num: int = 10) -> list[dict]:
+    """Search YouTube via yt-dlp ytsearch and return matching videos."""
+    try:
+        results = _search_videos(query, num)
+        return results
+    except Exception as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool(
+    description="Fetch latest videos from one or more YouTube channel URLs.",
+)
+async def fetch_channel_feed(
+    channel_urls: list[str],
+    num: int = 5,
+) -> dict:
+    """Get the latest N videos from each given channel URL. Returns sorted by date (newest first)."""
+    try:
+        all_videos: list[dict] = []
+        for url in channel_urls:
+            videos = _fetch_latest(url, num)
+            all_videos.extend(videos)
+        all_videos.sort(key=lambda v: v.get("upload_date", ""), reverse=True)
+        return {"status": "ok", "videos": all_videos}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 def main() -> None:
