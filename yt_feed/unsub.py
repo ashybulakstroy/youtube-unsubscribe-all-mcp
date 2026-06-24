@@ -151,16 +151,8 @@ def cmd_list(browser: str, profile_dir: str | None = None) -> None:
         page.goto("https://www.youtube.com/feed/channels", wait_until="networkidle")
         time.sleep(2)
         _scroll_to_bottom(page)
-        channels = _get_channels(page)
+        channels = _deduplicate(_get_channels(page))
         context.close()
-
-    # Deduplicate
-    seen: dict[str, dict] = {}
-    for ch in channels:
-        cid = ch.get("id", "")
-        if cid and cid not in seen:
-            seen[cid] = ch
-    channels = list(seen.values())
 
     print(f"Found {len(channels)} subscribed channels:\n")
     for ch in sorted(channels, key=lambda x: x["name"].lower()):
@@ -174,6 +166,11 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
     import os
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
 
+    max_passes = 5
+    total_ok = 0
+    total_fail = 0
+    confirmed = dry_run or yes
+
     print("Launching browser...", file=sys.stderr, flush=True)
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
@@ -181,56 +178,74 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
         )
         page = context.new_page()
 
-        # Step 1: get channels
-        print("Loading subscriptions page...", file=sys.stderr, flush=True)
-        page.goto("https://www.youtube.com/feed/channels", wait_until="domcontentloaded", timeout=30000)
-        print("Scrolling...", file=sys.stderr, flush=True)
-        time.sleep(2)
-        _scroll_to_bottom(page)
-        channels = _get_channels(page)
+        for attempt in range(1, max_passes + 1):
+            if attempt > 1:
+                print(f"\n--- Pass {attempt} (verification) ---", file=sys.stderr, flush=True)
 
-        if not channels:
-            print("No channels found.")
-            context.close()
-            return
+            # Step 1: get channels
+            print("Loading subscriptions page...", file=sys.stderr, flush=True)
+            page.goto("https://www.youtube.com/feed/channels", wait_until="domcontentloaded", timeout=30000)
+            print("Scrolling...", file=sys.stderr, flush=True)
+            time.sleep(2)
+            _scroll_to_bottom(page)
 
-        # Deduplicate
-        seen: dict[str, dict] = {}
-        for ch in channels:
-            cid = ch.get("id", "")
-            if cid and cid not in seen:
-                seen[cid] = ch
-        channels = list(seen.values())
-        print(f"Found {len(channels)} subscribed channels.", file=sys.stderr, flush=True)
+            channels = _deduplicate(_get_channels(page))
 
-        if not dry_run and not yes:
-            print(f"\nThis will unsubscribe from ALL {len(channels)} channels!")
-            confirm = input("Type 'yes' to continue: ")
-            if confirm.lower() != "yes":
-                print("Cancelled.")
-                context.close()
-                sys.exit(0)
+            if not channels:
+                print("No more subscriptions found!", file=sys.stderr, flush=True)
+                break
 
-        # Step 2: unsubscribe
-        ok = fail = 0
-        for i, ch in enumerate(channels, 1):
-            name = ch.get("name", "") or ch.get("id", "")
-            sys.stdout.write(f"[{i}/{len(channels)}] {name} ({ch['id']})")
-            sys.stdout.flush()
+            print(f"Found {len(channels)} subscribed channels.", file=sys.stderr, flush=True)
+
+            if attempt == 1 and not confirmed:
+                print(f"\nThis will unsubscribe from ALL {len(channels)} channels!")
+                confirm = input("Type 'yes' to continue: ")
+                if confirm.lower() != "yes":
+                    print("Cancelled.")
+                    context.close()
+                    sys.exit(0)
+
             if dry_run:
-                sys.stdout.write(" [dry-run]\n")
-                continue
+                for ch in channels:
+                    print(f"  {ch['name']} — https://www.youtube.com/channel/{ch['id']}")
+                context.close()
+                return
 
-            result = _unsubscribe(page, ch["id"])
-            if result.get("ok"):
-                sys.stdout.write(" OK\n")
-                ok += 1
-            else:
-                sys.stdout.write(f" FAIL (status={result.get('status','?')})\n")
-                fail += 1
-            time.sleep(0.3)
+            # Step 2: unsubscribe
+            ok = fail = 0
+            for i, ch in enumerate(channels, 1):
+                name = ch.get("name", "") or ch.get("id", "")
+                sys.stdout.write(f"[{i}/{len(channels)}] {name} ({ch['id']})")
+                sys.stdout.flush()
+
+                result = _unsubscribe(page, ch["id"])
+                if result.get("ok"):
+                    sys.stdout.write(" OK\n")
+                    ok += 1
+                else:
+                    sys.stdout.write(f" FAIL (status={result.get('status','?')})\n")
+                    fail += 1
+                time.sleep(0.3)
+
+            total_ok += ok
+            total_fail += fail
+
+            if fail == 0:
+                break
+
+            if attempt < max_passes:
+                print(f"\n{len(channels)} channels remain ({ok} OK / {fail} FAIL). Re-checking...", file=sys.stderr, flush=True)
 
         context.close()
 
     if not dry_run:
-        print(f"\nDone. OK={ok}, Failed={fail}")
+        print(f"\nAll passes done. Total OK={total_ok}, Failed={total_fail}")
+
+
+def _deduplicate(channels: list[dict]) -> list[dict]:
+    seen: dict[str, dict] = {}
+    for ch in channels:
+        cid = ch.get("id", "")
+        if cid and cid not in seen:
+            seen[cid] = ch
+    return list(seen.values())

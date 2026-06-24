@@ -225,26 +225,47 @@ async def unsubscribe_all(
     """Unsubscribe from every channel the account follows. Only executes if confirm=True."""
     if not confirm:
         return {"status": "cancelled", "message": "Set confirm=True to proceed with mass unsubscription."}
+
+    max_passes = 5
+    total_ok = 0
+    total_fail = 0
+    passes_done = 0
+
     try:
         page = await _ensure_browser(browser, profile_dir)
-        channels = await _fetch_channels(page)
-        total = len(channels)
-        if total == 0:
-            return {"status": "ok", "unsubscribed_count": 0, "failed_count": 0}
-        ok = fail = 0
-        for i, ch in enumerate(channels, 1):
-            result = await _unsubscribe_async(page, ch["id"])
-            if result.get("ok"):
-                ok += 1
-            else:
-                fail += 1
-            await asyncio.sleep(0.3)
+
+        for attempt in range(1, max_passes + 1):
+            passes_done = attempt
+            channels = await _fetch_channels(page)
+            total = len(channels)
+
+            if total == 0:
+                break
+
+            ok = fail = 0
+            for ch in channels:
+                result = await _unsubscribe_async(page, ch["id"])
+                if result.get("ok"):
+                    ok += 1
+                else:
+                    fail += 1
+                await asyncio.sleep(0.3)
+
+            total_ok += ok
+            total_fail += fail
+
+            if fail == 0:
+                break
+
+            if attempt < max_passes:
+                pass  # will re-check next iteration
+
         await _close_browser()
         return {
             "status": "ok",
-            "total_channels": total,
-            "unsubscribed_count": ok,
-            "failed_count": fail,
+            "passes": passes_done,
+            "total_unsubscribed": total_ok,
+            "total_failed": total_fail,
         }
     except Exception as e:
         await _close_browser()
