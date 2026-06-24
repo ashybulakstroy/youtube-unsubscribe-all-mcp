@@ -218,7 +218,7 @@ async def list_subscriptions(
 
 
 @mcp.tool(
-    description="Unsubscribe from YouTube channels, optionally filtered by name patterns with * wildcard or by metadata (subs/inactivity).",
+    description="Unsubscribe from YouTube channels, optionally filtered by name/desc patterns with * wildcard or by metadata (subs/inactivity).",
 )
 async def unsubscribe_all(
     browser: str = "edge",
@@ -227,9 +227,11 @@ async def unsubscribe_all(
     name_patterns: list[str] | None = None,
     subs_below: int | None = None,
     inactive_days: int | None = None,
+    desc_patterns: list[str] | None = None,
 ) -> dict:
     """Unsubscribe from channels. Options:
     - name_patterns: e.g. ['*news*', '*tech'] — only matching names
+    - desc_patterns: e.g. ['*gaming*', '*review*'] — only matching descriptions
     - subs_below: unsubscribe from channels with fewer than N subscribers
     - inactive_days: unsubscribe from channels with no video in N days
     Omit all filters to unsubscribe from EVERY channel."""
@@ -240,7 +242,7 @@ async def unsubscribe_all(
     total_ok = 0
     total_fail = 0
     passes_done = 0
-    need_meta = subs_below is not None or inactive_days is not None
+    need_meta = subs_below is not None or inactive_days is not None or desc_patterns
 
     try:
         page = await _ensure_browser(browser, profile_dir)
@@ -254,14 +256,14 @@ async def unsubscribe_all(
 
             # Metadata filter (first pass only)
             if need_meta and attempt == 1:
-                need_date = inactive_days is not None
+                need_date = inactive_days is not None or desc_patterns
                 loop = asyncio.get_event_loop()
                 meta_list = await loop.run_in_executor(
                     None, lambda: _fetch_subscriptions_metadata(channels, need_date),
                 )
                 for ch, meta in zip(channels, meta_list):
                     ch["_meta"] = meta
-                channels = _filter_by_metadata(channels, subs_below, inactive_days)
+                channels = _filter_by_metadata(channels, subs_below, inactive_days, desc_patterns)
 
             total = len(channels)
 

@@ -216,15 +216,17 @@ def _filter_by_metadata(
     channels: list[dict],
     subs_below: int | None = None,
     inactive_days: int | None = None,
+    desc_patterns: list[str] | None = None,
 ) -> list[dict]:
     """Filter channels list, keeping only those that match unsubscribe criteria.
 
-    subs_below: keep channels with subs < subs_below (low-subs → unsubscribe)
+    subs_below: keep channels with subs < subs_below
     inactive_days: keep channels with last video older than inactive_days
+    desc_patterns: keep channels whose description matches any pattern (* wildcard)
     Returns the filtered (to-unsubscribe) list.
     """
-    if subs_below is None and inactive_days is None:
-        return channels  # no metadata filter
+    if subs_below is None and inactive_days is None and not desc_patterns:
+        return channels
 
     now = datetime.now(timezone.utc)
     result = []
@@ -252,6 +254,11 @@ def _filter_by_metadata(
                         reasons.append(f"{days}d inactive > {inactive_days}d")
                 except ValueError:
                     reasons.append("invalid date")
+
+        if desc_patterns:
+            desc = meta.get("description", "") or ""
+            if _match_patterns(desc, desc_patterns):
+                reasons.append(f"desc matches")
 
         if reasons:
             ch["_filter_reason"] = "; ".join(reasons)
@@ -287,6 +294,7 @@ def cmd_unsub(
     name_patterns: list[str] | None = None,
     subs_below: int | None = None,
     inactive_days: int | None = None,
+    desc_patterns: list[str] | None = None,
 ) -> None:
     user_data, channel = _resolve_browser(browser, profile_dir)
     from playwright.sync_api import sync_playwright
@@ -298,13 +306,18 @@ def cmd_unsub(
     total_ok = 0
     total_fail = 0
     confirmed = dry_run or yes
-    need_meta = subs_below is not None or inactive_days is not None
+    need_meta = subs_below is not None or inactive_days is not None or desc_patterns
 
-    label = "ALL"
+    parts = []
     if name_patterns:
-        label = f"matching {name_patterns}"
-    if need_meta:
-        label += f" [subs<{subs_below or '∞'}, inactive>{inactive_days or '∞'}d]"
+        parts.append(f"name={name_patterns}")
+    if subs_below is not None:
+        parts.append(f"subs<{subs_below}")
+    if inactive_days is not None:
+        parts.append(f"inactive>{inactive_days}d")
+    if desc_patterns:
+        parts.append(f"desc={desc_patterns}")
+    label = "ALL" if not parts else ", ".join(parts)
 
     print("Launching browser...", file=sys.stderr, flush=True)
     with sync_playwright() as pw:
@@ -344,13 +357,13 @@ def cmd_unsub(
 
             # Fetch metadata and filter (only on first pass)
             if need_meta and attempt == 1:
-                need_date = inactive_days is not None
+                need_date = inactive_days is not None or desc_patterns
                 meta_list = _fetch_subscriptions_metadata(channels, need_video_date=need_date)
                 for ch, meta in zip(channels, meta_list):
                     ch["_meta"] = meta
 
                 before = len(channels)
-                channels = _filter_by_metadata(channels, subs_below, inactive_days)
+                channels = _filter_by_metadata(channels, subs_below, inactive_days, desc_patterns)
                 if before != len(channels):
                     print(f"Metadata filter: {len(channels)} of {before} match criteria.", file=sys.stderr, flush=True)
 
