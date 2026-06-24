@@ -2,7 +2,7 @@
 
 import argparse
 
-from yt_feed.feed import fetch_subscriptions_feed
+from yt_feed.feed import fetch_subscriptions_feed, search_videos
 from yt_feed.unsub import cmd_list, cmd_unsub
 
 
@@ -40,6 +40,10 @@ def main() -> None:
     list_parser.add_argument("--browser", default="edge", help="Browser to use: edge or chrome (default: edge)")
     list_parser.add_argument("--profile-dir", default=None, help="Path to browser profile User Data directory (auto-detected if omitted)")
 
+    search_parser = sub.add_parser("search", help="Search YouTube videos by query", description="Search YouTube videos and display results with title, channel, URL and date.")
+    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("-n", "--num", type=int, default=10, help="Number of results (default: 10)")
+
     args = parser.parse_args()
 
     if args.command == "feed":
@@ -50,6 +54,10 @@ def main() -> None:
         cmd_unsub(args.browser, args.dry_run, args.yes, args.profile_dir,
                   args.name_patterns, args.subs_below, args.inactive_days,
                   args.desc_patterns)
+    elif args.command == "search":
+        results = search_videos(args.query, args.num)
+        for v in results:
+            print(f"[{v['channel']}] {v['title']}  {v['url']}  ({v['upload_date']})")
 
 
 if __name__ == "__main__":

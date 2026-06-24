@@ -26,6 +26,7 @@ yt-feed feed channels.txt -n 5
 | Action | Command |
 |--------|---------|
 | Fetch feed | `.venv\Scripts\python -m yt_feed.cli feed [channels.txt] [-n N] [-o out.txt]` |
+| Search videos | `.venv\Scripts\python -m yt_feed.cli search <query> [-n N]` |
 | List subscriptions | `.venv\Scripts\python -m yt_feed.cli list-subs [--browser chrome] [--profile-dir <path>]` |
 | Dry-run unsubscribe | `.venv\Scripts\python -m yt_feed.cli unsub --dry-run [--browser chrome] [--profile-dir <path>]` |
 | Unsubscribe from all | `.venv\Scripts\python -m yt_feed.cli unsub [--browser chrome] [--profile-dir <path>]` |

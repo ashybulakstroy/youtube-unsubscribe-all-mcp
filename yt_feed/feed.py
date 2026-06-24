@@ -1,6 +1,5 @@
 """Fetch and display the latest videos from a list of YouTube channels."""
 
-import json
 import sys
 
 import yt_dlp
@@ -26,6 +25,29 @@ def fetch_latest(channel_url: str, num: int) -> list[dict]:
                 "title": e.get("title"),
                 "url": f"https://youtube.com/watch?v={e.get('id')}",
                 "uploader": info.get("uploader") or info.get("channel", ""),
+                "upload_date": e.get("upload_date", ""),
+            }
+            for e in entries
+            if e
+        ]
+
+
+def search_videos(query: str, num: int = 10) -> list[dict]:
+    ydl_opts = {
+        "quiet": True,
+        "extract_flat": "in_playlist",
+        "playlistend": num,
+        "default_search": "ytsearch",
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch{num}:{query}", download=False)
+        entries = info.get("entries", [])
+        return [
+            {
+                "title": e.get("title"),
+                "url": f"https://youtube.com/watch?v={e.get('id')}",
+                "channel": e.get("channel") or e.get("uploader", ""),
+                "channel_url": e.get("channel_url", ""),
                 "upload_date": e.get("upload_date", ""),
             }
             for e in entries
