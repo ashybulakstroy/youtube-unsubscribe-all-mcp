@@ -28,6 +28,10 @@ yt-feed feed channels.txt -n 5
 | Fetch feed | `.venv\Scripts\python -m yt_feed.cli feed [channels.txt] [-n N] [-o out.txt]` |
 | Search videos | `.venv\Scripts\python -m yt_feed.cli search <query> [-n N]` |
 | List subscriptions | `.venv\Scripts\python -m yt_feed.cli list-subs [--browser chrome] [--profile-dir <path>]` |
+| Unsub by name | `.venv\Scripts\python -m yt_feed.cli unsub --name "*news*"` |
+| Unsub by subs | `.venv\Scripts\python -m yt_feed.cli unsub --subs-below 1000` |
+| Unsub by inactivity | `.venv\Scripts\python -m yt_feed.cli unsub --inactive 365` |
+| Unsub by description | `.venv\Scripts\python -m yt_feed.cli unsub --desc "*game*"` |
 | Dry-run unsubscribe | `.venv\Scripts\python -m yt_feed.cli unsub --dry-run [--browser chrome] [--profile-dir <path>]` |
 | Unsubscribe from all | `.venv\Scripts\python -m yt_feed.cli unsub [--browser chrome] [--profile-dir <path>]` |
 | MCP server (stdio) | `.venv\Scripts\python -m yt_feed.mcp_server` |
@@ -35,10 +39,10 @@ yt-feed feed channels.txt -n 5
 
 ## Structure
 
-- `yt_feed/cli.py` — CLI entry point (argparse, subcommands: `feed`, `unsub`, `list-subs`)
-- `yt_feed/feed.py` — yt-dlp fetching and output formatting
-- `yt_feed/unsub.py` — cookie export, channel listing, InnerTube API unsubscription
-- `yt_feed/mcp_server.py` — MCP server exposing unsub tools via Model Context Protocol
+- `yt_feed/cli.py` — CLI entry point (argparse, subcommands: `feed`, `search`, `list-subs`, `unsub`)
+- `yt_feed/feed.py` — yt-dlp fetching, output formatting, YouTube search
+- `yt_feed/unsub.py` — cookie export, channel listing, InnerTube API unsubscription, metadata fetch & filter
+- `yt_feed/mcp_server.py` — MCP server exposing all tools via Model Context Protocol
 - `channels.txt` — channel list (one per line, `#` comments)
 - `.venv/` — virtual environment (do not commit)
 
@@ -55,6 +59,17 @@ yt-feed feed channels.txt -n 5
 - Channel ID должен быть UCxxxxx, не handle (@name)
 - `launch_persistent_context` не работает если Edge уже запущен; перед запуском убивать `taskkill /f /im msedge.exe`
 - При зависании: убить python.exe процессы
+
+## MCP tools
+
+| Tool | Description |
+|------|------------|
+| `list_subscriptions` | List all subscribed channels (browser) |
+| `unsubscribe_all` | Unsubscribe with filters: name, desc, subs_below, inactive_days |
+| `unsubscribe_channels` | Unsubscribe by specific channel IDs |
+| `search_videos(query, num)` | Search YouTube videos via yt-dlp |
+| `fetch_channel_feed(channel_urls, num)` | Latest videos from given channel URLs |
+| `close_browser` | Close managed browser context |
 
 ## Notes
 
