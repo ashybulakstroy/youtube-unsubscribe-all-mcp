@@ -17,6 +17,7 @@ from mcp.server import FastMCP
 from yt_feed.unsub import (
     _default_profile_dir,
     _browser_channel,
+    _match_patterns,
     YT_API_BASE,
     API_VERSION,
 )
@@ -215,16 +216,19 @@ async def list_subscriptions(
 
 
 @mcp.tool(
-    description="Unsubscribe from ALL YouTube channels. Requires confirm=True to proceed.",
+    description="Unsubscribe from YouTube channels, optionally filtered by name patterns with * wildcard.",
 )
 async def unsubscribe_all(
     browser: str = "edge",
     profile_dir: str | None = None,
     confirm: bool = False,
+    name_patterns: list[str] | None = None,
 ) -> dict:
-    """Unsubscribe from every channel the account follows. Only executes if confirm=True."""
+    """Unsubscribe from channels. If name_patterns is provided (e.g. ['*news*', '*tech']),
+    only channels whose name matches at least one pattern are unsubscribed.
+    Omit name_patterns to unsubscribe from EVERY channel."""
     if not confirm:
-        return {"status": "cancelled", "message": "Set confirm=True to proceed with mass unsubscription."}
+        return {"status": "cancelled", "message": "Set confirm=True to proceed with unsubscription."}
 
     max_passes = 5
     total_ok = 0
@@ -237,6 +241,10 @@ async def unsubscribe_all(
         for attempt in range(1, max_passes + 1):
             passes_done = attempt
             channels = await _fetch_channels(page)
+
+            if name_patterns:
+                channels = [ch for ch in channels if _match_patterns(ch.get("name", ""), name_patterns)]
+
             total = len(channels)
 
             if total == 0:
@@ -256,9 +264,6 @@ async def unsubscribe_all(
 
             if fail == 0:
                 break
-
-            if attempt < max_passes:
-                pass  # will re-check next iteration
 
         await _close_browser()
         return {

@@ -1,5 +1,6 @@
 """Unsubscribe from all YouTube channels using Playwright (browser context)."""
 
+import fnmatch
 import sys
 import time
 from pathlib import Path
@@ -159,7 +160,7 @@ def cmd_list(browser: str, profile_dir: str | None = None) -> None:
         print(f"  {ch['name']} — https://www.youtube.com/channel/{ch['id']}")
 
 
-def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str | None = None) -> None:
+def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str | None = None, name_patterns: list[str] | None = None) -> None:
     user_data, channel = _resolve_browser(browser, profile_dir)
     from playwright.sync_api import sync_playwright
 
@@ -170,6 +171,8 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
     total_ok = 0
     total_fail = 0
     confirmed = dry_run or yes
+
+    label = f"matching {name_patterns}" if name_patterns else "ALL"
 
     print("Launching browser...", file=sys.stderr, flush=True)
     with sync_playwright() as pw:
@@ -195,10 +198,20 @@ def cmd_unsub(browser: str, dry_run: bool, yes: bool = False, profile_dir: str |
                 print("No more subscriptions found!", file=sys.stderr, flush=True)
                 break
 
-            print(f"Found {len(channels)} subscribed channels.", file=sys.stderr, flush=True)
+            # Filter by name patterns
+            if name_patterns:
+                before = len(channels)
+                channels = [ch for ch in channels if _match_patterns(ch.get("name", ""), name_patterns)]
+                print(f"Found {before} subscribed, {len(channels)} match {label}.", file=sys.stderr, flush=True)
+            else:
+                print(f"Found {len(channels)} subscribed channels.", file=sys.stderr, flush=True)
+
+            if not channels:
+                print("No channels match the given patterns.", file=sys.stderr, flush=True)
+                break
 
             if attempt == 1 and not confirmed:
-                print(f"\nThis will unsubscribe from ALL {len(channels)} channels!")
+                print(f"\nThis will unsubscribe from {label} ({len(channels)} channels)!")
                 confirm = input("Type 'yes' to continue: ")
                 if confirm.lower() != "yes":
                     print("Cancelled.")
@@ -249,3 +262,10 @@ def _deduplicate(channels: list[dict]) -> list[dict]:
         if cid and cid not in seen:
             seen[cid] = ch
     return list(seen.values())
+
+
+def _match_patterns(name: str, patterns: list[str] | None) -> bool:
+    if not patterns:
+        return True
+    name_lower = name.lower()
+    return any(fnmatch.fnmatch(name_lower, p.lower()) for p in patterns)
