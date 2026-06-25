@@ -113,7 +113,16 @@ async def _get_channels_async(page) -> list[dict]:
                 || '';
             const url = data?.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url
                 || '';
-            return { id: channelId, name, url: url ? 'https://www.youtube.com' + url : '' };
+            let feedbackToken = '';
+            const menuItems = data?.menu?.menuRenderer?.items || [];
+            for (const item of menuItems) {
+                const ep = item?.menuServiceItemRenderer?.serviceEndpoint?.feedbackEndpoint;
+                if (ep?.feedbackToken) {
+                    feedbackToken = ep.feedbackToken;
+                    break;
+                }
+            }
+            return { id: channelId, name, url: url ? 'https://www.youtube.com' + url : '', feedbackToken };
         }).filter(c => c.id && c.id.startsWith('UC'));
     }""")
     if items:
@@ -133,7 +142,16 @@ async def _get_channels_async(page) -> list[dict]:
                     const id = r.channelId || '';
                     const name = r.title?.simpleText || r.title?.runs?.[0]?.text || '';
                     const url = r.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url || '';
-                    return { id, name, url: url ? 'https://www.youtube.com' + url : '' };
+                    let feedbackToken = '';
+                    const menuItems = r?.menu?.menuRenderer?.items || [];
+                    for (const item of menuItems) {
+                        const ep = item?.menuServiceItemRenderer?.serviceEndpoint?.feedbackEndpoint;
+                        if (ep?.feedbackToken) {
+                            feedbackToken = ep.feedbackToken;
+                            break;
+                        }
+                    }
+                    return { id, name, url: url ? 'https://www.youtube.com' + url : '', feedbackToken };
                 });
             if (result.length) return result;
         }
@@ -175,6 +193,94 @@ async def _unsubscribe_async(page, channel_id: str) -> dict:
                             }}
                         }},
                         channelIds: ['{channel_id}']
+                    }})
+                }});
+                return {{ ok: resp.ok, status: resp.status }};
+            }} catch (e) {{
+                return {{ ok: false, error: e.message }};
+            }}
+        }}
+    """)
+
+
+async def _subscribe_async(page, channel_id: str) -> dict:
+    return await page.evaluate(f"""
+        async () => {{
+            try {{
+                const cookies = document.cookie.split(';').reduce((acc, c) => {{
+                    const [k, v] = c.trim().split('=');
+                    acc[k] = v;
+                    return acc;
+                }}, {{}});
+                const sapisid = cookies['__Secure-3PSAPISID'] || cookies['SAPISID'];
+                if (!sapisid) {{
+                    return {{ ok: false, status: 0, error: 'No SAPISID cookie' }};
+                }}
+                const timestamp = Math.floor(Date.now() / 1000);
+                const origin = 'https://www.youtube.com';
+                const hash = await crypto.subtle.digest('SHA-1',
+                    new TextEncoder().encode(timestamp + ' ' + sapisid + ' ' + origin)
+                ).then(h => Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join(''));
+                const resp = await fetch('{YT_API_BASE}/subscription/subscribe', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'SAPISIDHASH ' + timestamp + '_' + hash,
+                        'X-Origin': 'https://www.youtube.com',
+                    }},
+                    credentials: 'include',
+                    body: JSON.stringify({{
+                        context: {{
+                            client: {{
+                                clientName: 'WEB',
+                                clientVersion: '{API_VERSION}',
+                            }}
+                        }},
+                        channelIds: ['{channel_id}']
+                    }})
+                }});
+                return {{ ok: resp.ok, status: resp.status }};
+            }} catch (e) {{
+                return {{ ok: false, error: e.message }};
+            }}
+        }}
+    """)
+
+
+async def _dont_recommend_async(page, feedback_token: str) -> dict:
+    return await page.evaluate(f"""
+        async () => {{
+            try {{
+                const cookies = document.cookie.split(';').reduce((acc, c) => {{
+                    const [k, v] = c.trim().split('=');
+                    acc[k] = v;
+                    return acc;
+                }}, {{}});
+                const sapisid = cookies['__Secure-3PSAPISID'] || cookies['SAPISID'];
+                if (!sapisid) {{
+                    return {{ ok: false, status: 0, error: 'No SAPISID cookie' }};
+                }}
+                const timestamp = Math.floor(Date.now() / 1000);
+                const origin = 'https://www.youtube.com';
+                const hash = await crypto.subtle.digest('SHA-1',
+                    new TextEncoder().encode(timestamp + ' ' + sapisid + ' ' + origin)
+                ).then(h => Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join(''));
+                const resp = await fetch('{YT_API_BASE}/feedback', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'SAPISIDHASH ' + timestamp + '_' + hash,
+                        'X-Origin': 'https://www.youtube.com',
+                    }},
+                    credentials: 'include',
+                    body: JSON.stringify({{
+                        context: {{
+                            client: {{
+                                clientName: 'WEB',
+                                clientVersion: '{API_VERSION}',
+                            }}
+                        }},
+                        feedbackToken: '{feedback_token}'
                     }})
                 }});
                 return {{ ok: resp.ok, status: resp.status }};
@@ -229,12 +335,14 @@ async def unsubscribe_all(
     subs_below: int | None = None,
     inactive_days: int | None = None,
     desc_patterns: list[str] | None = None,
+    dont_recommend: bool = True,
 ) -> dict:
     """Unsubscribe from channels. Options:
     - name_patterns: e.g. ['*news*', '*tech'] — only matching names
     - desc_patterns: e.g. ['*gaming*', '*review*'] — only matching descriptions
     - subs_below: unsubscribe from channels with fewer than N subscribers
     - inactive_days: unsubscribe from channels with no video in N days
+    - dont_recommend: also send 'Don't recommend channel' feedback (default: True)
     Omit all filters to unsubscribe from EVERY channel."""
     if not confirm:
         return {"status": "cancelled", "message": "Set confirm=True to proceed with unsubscription."}
@@ -273,6 +381,9 @@ async def unsubscribe_all(
 
             ok = fail = 0
             for ch in channels:
+                if dont_recommend and ch.get("feedbackToken"):
+                    await _dont_recommend_async(page, ch["feedbackToken"])
+                    await asyncio.sleep(0.2)
                 result = await _unsubscribe_async(page, ch["id"])
                 if result.get("ok"):
                     ok += 1
@@ -306,7 +417,9 @@ async def unsubscribe_channels(
     browser: str = "edge",
     profile_dir: str | None = None,
 ) -> dict:
-    """Unsubscribe from a list of specific channel IDs. Useful after calling list_subscriptions."""
+    """Unsubscribe from a list of specific channel IDs. Useful after calling list_subscriptions.
+    Note: 'Don't recommend channel' feedback is not sent for this function as feedback tokens
+    are obtained during channel listing. Use unsubscribe_all for full feedback support."""
     if not channel_ids:
         return {"status": "ok", "unsubscribed_count": 0, "failed_count": 0, "message": "No channel IDs provided."}
     try:
@@ -324,6 +437,49 @@ async def unsubscribe_channels(
         return {
             "status": "ok",
             "unsubscribed_count": ok,
+            "failed_count": fail,
+            "results": results,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+@mcp.tool(
+    description="Subscribe to YouTube channels by channel IDs (UCxxxxx) or URLs/handles.",
+)
+async def subscribe_channels(
+    channels: list[str],
+    browser: str = "edge",
+    profile_dir: str | None = None,
+) -> dict:
+    """Subscribe to one or more YouTube channels. Each entry can be a UC ID, a YouTube URL, or a handle (@name).
+    Channel IDs are resolved via yt-dlp if not already a UC ID."""
+    from yt_feed.unsub import _resolve_channel_id
+
+    resolved: list[dict] = []
+    for i, raw in enumerate(channels):
+        cid = _resolve_channel_id(raw)
+        if cid:
+            resolved.append({"id": cid, "input": raw})
+
+    if not resolved:
+        return {"status": "error", "message": "No channels could be resolved.", "resolved": []}
+
+    try:
+        page = await _ensure_browser(browser, profile_dir)
+        ok = fail = 0
+        results: list[dict] = []
+        for ch in resolved:
+            result = await _subscribe_async(page, ch["id"])
+            results.append({"channel_id": ch["id"], "input": ch["input"], "ok": result.get("ok", False), "error": result.get("error")})
+            if result.get("ok"):
+                ok += 1
+            else:
+                fail += 1
+            await asyncio.sleep(0.5)
+        return {
+            "status": "ok",
+            "subscribed_count": ok,
             "failed_count": fail,
             "results": results,
         }

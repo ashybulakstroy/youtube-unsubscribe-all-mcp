@@ -27,6 +27,7 @@ yt-feed feed channels.txt -n 5
 |--------|---------|
 | Fetch feed | `.venv\Scripts\python -m yt_feed.cli feed [channels.txt] [-n N] [-o out.txt]` |
 | Search videos | `.venv\Scripts\python -m yt_feed.cli search <query> [-n N]` |
+| Subscribe | `.venv\Scripts\python -m yt_feed.cli sub <url/handle>... [--browser chrome] [--yes]` |
 | List subscriptions | `.venv\Scripts\python -m yt_feed.cli list-subs [--browser chrome] [--profile-dir <path>]` |
 | Unsub by name | `.venv\Scripts\python -m yt_feed.cli unsub --name "*news*"` |
 | Unsub by subs | `.venv\Scripts\python -m yt_feed.cli unsub --subs-below 1000` |
@@ -34,6 +35,7 @@ yt-feed feed channels.txt -n 5
 | Unsub by description | `.venv\Scripts\python -m yt_feed.cli unsub --desc "*game*"` |
 | Dry-run unsubscribe | `.venv\Scripts\python -m yt_feed.cli unsub --dry-run [--browser chrome] [--profile-dir <path>]` |
 | Unsubscribe from all | `.venv\Scripts\python -m yt_feed.cli unsub [--browser chrome] [--profile-dir <path>]` |
+| Unsub with dont-recommend | `.venv\Scripts\python -m yt_feed.cli unsub --no-dont-recommend` (skip feedback) |
 | MCP server (stdio) | `.venv\Scripts\python -m yt_feed.mcp_server` |
 | Install dev | `.venv\Scripts\pip install -e .` |
 
@@ -50,7 +52,10 @@ yt-feed feed channels.txt -n 5
 
 1. `Playwright` + `launch_persistent_context(channel="msedge", headless=True)` — запуск Edge с профилем пользователя
 2. `el.data.channelId` — извлечение реальных UC-айди каналов из DOM (не handle `@name`)
-3. `fetch()` из контекста браузера + `SAPISIDHASH` (SHA1(timestamp + SAPISID + origin)) — отписка через InnerTube API
+3. `el.data.menu.menuRenderer.items[].menuServiceItemRenderer.serviceEndpoint.feedbackEndpoint.feedbackToken` — извлечение feedbackToken для "Не рекомендовать канал"
+4. `fetch()` из контекста браузера + `SAPISIDHASH` (SHA1(timestamp + SAPISID + origin)):
+   - `POST /youtubei/v1/feedback` — отправка "Don't recommend channel" (с `feedbackToken`)
+   - `POST /youtubei/v1/subscription/unsubscribe` — отписка (с `channelIds`)
 
 Ключевые моменты:
 - Куки НЕ экспортируются — браузер сам их предоставляет через `credentials: 'include'`
@@ -59,6 +64,7 @@ yt-feed feed channels.txt -n 5
 - Channel ID должен быть UCxxxxx, не handle (@name)
 - `launch_persistent_context` не работает если Edge уже запущен; перед запуском убивать `taskkill /f /im msedge.exe`
 - При зависании: убить python.exe процессы
+- `--no-dont-recommend` чтобы пропустить feedback API и только отписаться
 
 ## MCP tools
 
@@ -67,6 +73,7 @@ yt-feed feed channels.txt -n 5
 | `list_subscriptions` | List all subscribed channels (browser) |
 | `unsubscribe_all` | Unsubscribe with filters: name, desc, subs_below, inactive_days |
 | `unsubscribe_channels` | Unsubscribe by specific channel IDs |
+| `subscribe_channels` | Subscribe by channel IDs, URLs, or handles |
 | `search_videos(query, num)` | Search YouTube videos via yt-dlp |
 | `fetch_channel_feed(channel_urls, num)` | Latest videos from given channel URLs |
 | `close_browser` | Close managed browser context |

@@ -51,7 +51,16 @@ def _get_channels(page) -> list[dict]:
                 || '';
             const url = data?.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url
                 || '';
-            return { id: channelId, name, url: url ? 'https://www.youtube.com' + url : '' };
+            let feedbackToken = '';
+            const menuItems = data?.menu?.menuRenderer?.items || [];
+            for (const item of menuItems) {
+                const ep = item?.menuServiceItemRenderer?.serviceEndpoint?.feedbackEndpoint;
+                if (ep?.feedbackToken) {
+                    feedbackToken = ep.feedbackToken;
+                    break;
+                }
+            }
+            return { id: channelId, name, url: url ? 'https://www.youtube.com' + url : '', feedbackToken };
         }).filter(c => c.id && c.id.startsWith('UC'));
     }""")
     if items:
@@ -73,7 +82,16 @@ def _get_channels(page) -> list[dict]:
                     const id = r.channelId || '';
                     const name = r.title?.simpleText || r.title?.runs?.[0]?.text || '';
                     const url = r.navigationEndpoint?.commandMetadata?.webCommandMetadata?.url || '';
-                    return { id, name, url: url ? 'https://www.youtube.com' + url : '' };
+                    let feedbackToken = '';
+                    const menuItems = r?.menu?.menuRenderer?.items || [];
+                    for (const item of menuItems) {
+                        const ep = item?.menuServiceItemRenderer?.serviceEndpoint?.feedbackEndpoint;
+                        if (ep?.feedbackToken) {
+                            feedbackToken = ep.feedbackToken;
+                            break;
+                        }
+                    }
+                    return { id, name, url: url ? 'https://www.youtube.com' + url : '', feedbackToken };
                 });
             if (result.length) return result;
         }
@@ -139,6 +157,178 @@ def _unsubscribe(page, channel_id: str) -> dict:
             }}
         }}
     """)
+
+
+def _dont_recommend(page, feedback_token: str) -> dict:
+    """Send 'Don't recommend channel' feedback via InnerTube API."""
+    return page.evaluate(f"""
+        async () => {{
+            try {{
+                const cookies = document.cookie.split(';').reduce((acc, c) => {{
+                    const [k, v] = c.trim().split('=');
+                    acc[k] = v;
+                    return acc;
+                }}, {{}});
+                const sapisid = cookies['__Secure-3PSAPISID'] || cookies['SAPISID'];
+                if (!sapisid) {{
+                    return {{ ok: false, status: 0, error: 'No SAPISID cookie' }};
+                }}
+                const timestamp = Math.floor(Date.now() / 1000);
+                const origin = 'https://www.youtube.com';
+                const hash = await crypto.subtle.digest('SHA-1',
+                    new TextEncoder().encode(timestamp + ' ' + sapisid + ' ' + origin)
+                ).then(h => Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join(''));
+
+                const resp = await fetch('{YT_API_BASE}/feedback', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'SAPISIDHASH ' + timestamp + '_' + hash,
+                        'X-Origin': 'https://www.youtube.com',
+                    }},
+                    credentials: 'include',
+                    body: JSON.stringify({{
+                        context: {{
+                            client: {{
+                                clientName: 'WEB',
+                                clientVersion: '{API_VERSION}',
+                            }}
+                        }},
+                        feedbackToken: '{feedback_token}'
+                    }})
+                }});
+                return {{ ok: resp.ok, status: resp.status }};
+            }} catch (e) {{
+                return {{ ok: false, error: e.message }};
+            }}
+        }}
+    """)
+
+
+def _subscribe(page, channel_id: str) -> dict:
+    """Subscribe via InnerTube API using browser fetch with SAPISIDHASH."""
+    return page.evaluate(f"""
+        async () => {{
+            try {{
+                const cookies = document.cookie.split(';').reduce((acc, c) => {{
+                    const [k, v] = c.trim().split('=');
+                    acc[k] = v;
+                    return acc;
+                }}, {{}});
+                const sapisid = cookies['__Secure-3PSAPISID'] || cookies['SAPISID'];
+                if (!sapisid) {{
+                    return {{ ok: false, status: 0, error: 'No SAPISID cookie' }};
+                }}
+                const timestamp = Math.floor(Date.now() / 1000);
+                const origin = 'https://www.youtube.com';
+                const hash = await crypto.subtle.digest('SHA-1',
+                    new TextEncoder().encode(timestamp + ' ' + sapisid + ' ' + origin)
+                ).then(h => Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join(''));
+                const resp = await fetch('{YT_API_BASE}/subscription/subscribe', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'SAPISIDHASH ' + timestamp + '_' + hash,
+                        'X-Origin': 'https://www.youtube.com',
+                    }},
+                    credentials: 'include',
+                    body: JSON.stringify({{
+                        context: {{
+                            client: {{
+                                clientName: 'WEB',
+                                clientVersion: '{API_VERSION}',
+                            }}
+                        }},
+                        channelIds: ['{channel_id}']
+                    }})
+                }});
+                return {{ ok: resp.ok, status: resp.status }};
+            }} catch (e) {{
+                return {{ ok: false, error: e.message }};
+            }}
+        }}
+    """)
+
+
+def _resolve_channel_id(url_or_handle: str) -> str | None:
+    """Resolve a YouTube URL or handle to a UC channel ID using yt-dlp."""
+    import re
+    m = re.search(r'(UC[\w-]{22})', url_or_handle)
+    if m:
+        return m.group(1)
+    info = _extract_ytdlp(url_or_handle, extract_flat=True, playlistend=1)
+    if info:
+        cid = info.get("channel_id") or info.get("id")
+        if cid and cid.startswith("UC"):
+            return cid
+    return None
+
+
+def cmd_sub(
+    channels: list[str], browser: str, dry_run: bool = False,
+    yes: bool = False, profile_dir: str | None = None,
+) -> None:
+    """Subscribe to YouTube channels by URL or handle."""
+    resolved: list[dict] = []
+    print("Resolving channel IDs...", file=sys.stderr, flush=True)
+    for i, raw in enumerate(channels, 1):
+        cid = _resolve_channel_id(raw)
+        if cid:
+            resolved.append({"id": cid, "input": raw})
+            print(f"  [{i}/{len(channels)}] {raw} -> {cid}", file=sys.stderr, flush=True)
+        else:
+            print(f"  [{i}/{len(channels)}] {raw} -> FAILED to resolve", file=sys.stderr, flush=True)
+
+    if not resolved:
+        print("No channels could be resolved.", file=sys.stderr)
+        sys.exit(1)
+
+    if dry_run:
+        print(f"\nWould subscribe to {len(resolved)} channels:")
+        for ch in resolved:
+            print(f"  {ch['input']} — {ch['id']}")
+        return
+
+    if not yes:
+        print(f"\nThis will subscribe to {len(resolved)} channels!")
+        confirm = input("Type 'yes' to continue: ")
+        if confirm.lower() != "yes":
+            print("Cancelled.")
+            sys.exit(0)
+
+    user_data, channel = _resolve_browser(browser, profile_dir)
+    from playwright.sync_api import sync_playwright
+
+    import os
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
+    print("Launching browser...", file=sys.stderr, flush=True)
+    with sync_playwright() as pw:
+        context = pw.chromium.launch_persistent_context(
+            user_data_dir=user_data, channel=channel, headless=True,
+        )
+        page = context.new_page()
+        page.goto("https://www.youtube.com", wait_until="domcontentloaded")
+        time.sleep(1)
+
+        ok = fail = 0
+        for i, ch in enumerate(resolved, 1):
+            name = ch["input"]
+            sys.stdout.write(f"[{i}/{len(resolved)}] {name} ({ch['id']})")
+            sys.stdout.flush()
+
+            result = _subscribe(page, ch["id"])
+            if result.get("ok"):
+                sys.stdout.write(" OK\n")
+                ok += 1
+            else:
+                sys.stdout.write(f" FAIL (status={result.get('status','?')})\n")
+                fail += 1
+            time.sleep(0.5)
+
+        context.close()
+
+    print(f"\nDone. OK={ok}, Failed={fail}")
 
 
 def _extract_ytdlp(url: str, extract_flat: bool = True, playlistend: int = 1) -> dict | None:
@@ -295,6 +485,7 @@ def cmd_unsub(
     subs_below: int | None = None,
     inactive_days: int | None = None,
     desc_patterns: list[str] | None = None,
+    dont_recommend: bool = True,
 ) -> None:
     user_data, channel = _resolve_browser(browser, profile_dir)
     from playwright.sync_api import sync_playwright
@@ -383,26 +574,36 @@ def cmd_unsub(
                 for ch in channels:
                     reason = ch.get("_filter_reason", "")
                     extra = f"  [{reason}]" if reason else ""
-                    print(f"  {ch['name']} — {ch['id']}{extra}")
+                    dr = " [Don't recommend]" if dont_recommend and ch.get("feedbackToken") else ""
+                    print(f"  {ch['name']} — {ch['id']}{extra}{dr}")
                     meta = ch.get("_meta", {})
                     if meta.get("subs") is not None:
                         print(f"      subs: {meta['subs']}, last video: {meta.get('last_video_date', '?')}")
                 context.close()
                 return
 
-            # Step 2: unsubscribe
+            # Step 2: don't recommend then unsubscribe
             ok = fail = 0
             for i, ch in enumerate(channels, 1):
                 name = ch.get("name", "") or ch.get("id", "")
                 sys.stdout.write(f"[{i}/{len(channels)}] {name} ({ch['id']})")
                 sys.stdout.flush()
 
+                if dont_recommend and ch.get("feedbackToken"):
+                    dr_result = _dont_recommend(page, ch["feedbackToken"])
+                    if not dr_result.get("ok"):
+                        sys.stdout.write(f" DR-FAIL({dr_result.get('status','?')})")
+                    else:
+                        sys.stdout.write(" DR-OK")
+                    sys.stdout.flush()
+                    time.sleep(0.2)
+
                 result = _unsubscribe(page, ch["id"])
                 if result.get("ok"):
-                    sys.stdout.write(" OK\n")
+                    sys.stdout.write(" UNSUB-OK\n")
                     ok += 1
                 else:
-                    sys.stdout.write(f" FAIL (status={result.get('status','?')})\n")
+                    sys.stdout.write(f" UNSUB-FAIL({result.get('status','?')})\n")
                     fail += 1
                 time.sleep(0.3)
 
