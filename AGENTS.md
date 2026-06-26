@@ -47,6 +47,29 @@ yt-feed feed channels.txt -n 5
 - `yt_feed/mcp_server.py` — MCP server exposing all tools via Model Context Protocol
 - `channels.txt` — channel list (one per line, `#` comments)
 - `.venv/` — virtual environment (do not commit)
+- `unsub_all.bat` — batch script: kills Edge, unsubscribes from all, subscribes to `@azan_kz1`
+- `unsub_all_minimized.vbs` — VBS launcher that runs `unsub_all.bat` in a minimized window
+- `test_copy3.bat` — copies `unsub_all.bat` into Windows startup folder (legacy, prefer VBS method)
+
+## Auto-start on Windows
+
+При входе в систему можно автоматически запускать `unsub_all.bat`.
+
+| Method | File | Window | How to install |
+|--------|------|--------|---------------|
+| Legacy (bat) | `UnsubAllYoutube.bat` | Normal window | `test_copy3.bat` (копирует в `%APPDATA%\...\Startup\`) |
+| Recommended (VBS) | `UnsubAllYoutube.vbs` | **Minimized** | Скопировать `unsub_all_minimized.vbs` в папку Startup как `.vbs` |
+
+VBS-файл запускает `unsub_all.bat` со `WindowStyle = 7` (свёрнутое окно).  
+Ярлык с `WindowStyle = 7` также подходит — создаётся через PowerShell:
+
+```powershell
+$WS = New-Object -ComObject WScript.Shell
+$S = $WS.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\UnsubAllYoutube.lnk")
+$S.TargetPath = "C:\Work\Prj_32_YouTube\unsub_all.bat"
+$S.WindowStyle = 7
+$S.Save()
+```
 
 ## Architecture (unsub)
 
@@ -86,6 +109,7 @@ yt-feed feed channels.txt -n 5
 - `unsub --yes` для пропуска подтверждения (иначе `input()` не работает через трубу)
 - `--dry-run` показывает что будет отписано без изменений
 - yt-dlp не может расшифровать DPAPI-куки Edge на Windows — всегда использовать Playwright
+- Для автозагрузки используй `unsub_all_minimized.vbs` (свёрнутое окно), не `.bat`
 
 ## Profile paths (cross-platform)
 
