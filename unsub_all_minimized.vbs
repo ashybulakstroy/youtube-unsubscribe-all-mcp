@@ -1,0 +1,1 @@
+CreateObject("WScript.Shell").Run "C:\Work\Prj_32_YouTube\unsub_all.bat", 7, False
